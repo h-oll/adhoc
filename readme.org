@@ -16,19 +16,21 @@ First download the image (here named
 Card. Change the block device name appropriately (mine is
 =/dev/mmcblk0p1=).
 
+#+begin_src
 umount /dev/mmcblk0p1
 sudo dd bs=1M if=2020-05-27-raspios-buster-lite-armhf.img of=/dev/mmcblk0 conv=fsync
 mount /dev/mmcblk0p1
-
+#+end_src
 ** Enable ssh
 If the raspberry is used headless (without screen), you might want to
 be able to access it through ssh. In such case, you need to create an
 empty file named =ssh= in the boot directory on the SD Card that
 contains the OS.
 
+#+begin_src
 cd <boot directory on SDCard>
 touch ssh 
-
+#+end_src
 ** Setup the machine name
 Give a name to the machine and make sure you are informing the dhcp server about it. Here I chose =backhole=. If you setup another machine, give it a different name!
 
@@ -42,11 +44,11 @@ Edit =/etc/dhcpcd.conf= and replace =hostname= with =blackhole=
 You need to supply the password to =wpa_supplicant= which manages the wifi connections.
 
 Edit =/etc/wpa_supplicant/wpa_supplicant.conf= and make sure it starts with (adjust the country code it needed):
-
+#+begin_src
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
 country=US
-
+#+end_src
 Type =wpa_passphrase "WIFI SSID" "passphrase" | sudo tee --append /etc/wpa_supplicant/wpa_supplicant.conf= where you replace =WIFI SSID= and =passphrase= with the wifi name and passphrase.
 
 NB: this step is necessary only if the network that is connected to the internet is broadcasting through wifi. If you are connected to LAN via a cable, just plug the cable in your RJ45 socket.
@@ -57,13 +59,13 @@ Start the raspberry. It should connect to your network. Once you have identified
 First change the password by typing =passwd=.
 
 Then upgrade the current software:
-
+#+begin_src
 sudo apt-get update
 sudo apt-get upgrade
-
+#+end_src
 Install the following packages (=bridge-utils= allows to create a bridge between the networks of the two interfaces -- either primary network and ad-hoc one, or ad-hoc and access-point network; =batctl= manages the configuration of batman-adv kernel module in charge of the ad-hoc network; =dnsmasq= resource package for managing small networks).
 
-sudo apt-get install bridge-utils batctl dnsmasq
+=sudo apt-get install bridge-utils batctl dnsmasq=
 
 ** [Specific for the access points] Change the password, update the syste, install the necessary packages
 Start the raspberry. It should connect to your network. Once you have identified the IP address, ssh into it using the login =pi= and password =raspberry=.
@@ -71,13 +73,13 @@ Start the raspberry. It should connect to your network. Once you have identified
 First change the password by typing =passwd=.
 
 Then upgrade the current software:
-
+#+begin_src
 sudo apt-get update
 sudo apt-get upgrade
-
+#+end_src
 Install the following packages (=bridge-utils= allows to create a bridge between the networks of the two interfaces -- either primary network and ad-hoc one, or ad-hoc and access-point network; =batctl= manages the configuration of batman-adv kernel module in charge of the ad-hoc network; =hostapd= for creating an access point wifi).
 
-sudo apt-get install bridge-utils batctl hostapd
+=sudo apt-get install bridge-utils batctl hostapd=
 
 ** Define the parameters of the adhoc network
 This is done by creating the file =/etc/wpa_supplicant/adhoc_net.conf= as follows. You can setup the ssid and passphrase hte way you want.
