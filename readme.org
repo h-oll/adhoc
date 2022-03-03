@@ -1,0 +1,218 @@
+#+TITLE: Extending a network using an adhoc wifi network.
+
+* Overview
+This project is intended to extend a primary wifi network using raspberries equipped with two wifi cards. One of the raspberries is going to be the gateway to the primary wifi. It will use its second card to create an adhoc wifi network that is self-reconfigurable using batman-adv. The other raspberries, will connect onto this wifi and use their second wifi card to create each a new wifi that will be used by final clients.
+
+The requests will then come from the clients to an access point raspberry, then will flow through the adhoc network, find the gateway and finally exist to the primary network that is hopefully connected to the internet.
+
+The use of batman-adv makes the adhoc network quite robust to configuration changes (ie nodes becoming unavailable or being displaced). 
+
+* Process
+NB: I'm assuming here that you are setting up a headless machine. This means that you need to prepare the OS before hand so that on first boot every thing will be correct, and you wond need to attach a screen to the computer. This is not mandatory and you can modify the files below while directly interacting with the machine.
+
+** Burn raspios 
+First download the image (here named
+=2020-05-27-raspios-buster-lite-armhf.img=).  Then copy it to the SD
+Card. Change the block device name appropriately (mine is
+=/dev/mmcblk0p1=).
+
+umount /dev/mmcblk0p1
+sudo dd bs=1M if=2020-05-27-raspios-buster-lite-armhf.img of=/dev/mmcblk0 conv=fsync
+mount /dev/mmcblk0p1
+
+** Enable ssh
+If the raspberry is used headless (without screen), you might want to
+be able to access it through ssh. In such case, you need to create an
+empty file named =ssh= in the boot directory on the SD Card that
+contains the OS.
+
+cd <boot directory on SDCard>
+touch ssh 
+
+** Setup the machine name
+Give a name to the machine and make sure you are informing the dhcp server about it. Here I chose =backhole=. If you setup another machine, give it a different name!
+
+Type =echo "blackhole" > /etc/hostname=
+
+Edit =/etc/hosts= and replace =raspberrypi= with =blackhole=
+
+Edit =/etc/dhcpcd.conf= and replace =hostname= with =blackhole=
+
+** [Specific for the gateway] Grant access to the wifi network that will route you to the internet
+You need to supply the password to =wpa_supplicant= which manages the wifi connections.
+
+Edit =/etc/wpa_supplicant/wpa_supplicant.conf= and make sure it starts with (adjust the country code it needed):
+
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=US
+
+Type =wpa_passphrase "WIFI SSID" "passphrase" | sudo tee --append /etc/wpa_supplicant/wpa_supplicant.conf= where you replace =WIFI SSID= and =passphrase= with the wifi name and passphrase.
+
+NB: this step is necessary only if the network that is connected to the internet is broadcasting through wifi. If you are connected to LAN via a cable, just plug the cable in your RJ45 socket.
+
+** [Specific for the gateway] Change the password, update the syste, install the necessary packages
+Start the raspberry. It should connect to your network. Once you have identified the IP address, ssh into it using the login =pi= and password =raspberry=.
+
+First change the password by typing =passwd=.
+
+Then upgrade the current software:
+
+sudo apt-get update
+sudo apt-get upgrade
+
+Install the following packages (=bridge-utils= allows to create a bridge between the networks of the two interfaces -- either primary network and ad-hoc one, or ad-hoc and access-point network; =batctl= manages the configuration of batman-adv kernel module in charge of the ad-hoc network; =dnsmasq= resource package for managing small networks).
+
+sudo apt-get install bridge-utils batctl dnsmasq
+
+** [Specific for the access points] Change the password, update the syste, install the necessary packages
+Start the raspberry. It should connect to your network. Once you have identified the IP address, ssh into it using the login =pi= and password =raspberry=.
+
+First change the password by typing =passwd=.
+
+Then upgrade the current software:
+
+sudo apt-get update
+sudo apt-get upgrade
+
+Install the following packages (=bridge-utils= allows to create a bridge between the networks of the two interfaces -- either primary network and ad-hoc one, or ad-hoc and access-point network; =batctl= manages the configuration of batman-adv kernel module in charge of the ad-hoc network; =hostapd= for creating an access point wifi).
+
+sudo apt-get install bridge-utils batctl hostapd
+
+** Define the parameters of the adhoc network
+This is done by creating the file =/etc/wpa_supplicant/adhoc_net.conf= as follows. You can setup the ssid and passphrase hte way you want.
+#+begin_src
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+ap_scan=2
+
+network={
+    ssid="adhoc_net"
+    mode=1
+    frequency=2432
+    proto=RSN
+    key_mgmt=WPA-PSK
+    pairwise=CCMP
+    group=CCMP
+    psk="secret passphrase for adhoc_net"
+}
+#+end_src
+
+You also need to setup the interface =wlan1= that hosts the adhoc network by editing the file =/etc/network/interfaces.d/wlan1=
+
+#+begin_src
+auto wlan1
+iface wlan1 inet manual
+  wireless-channel 1
+  wireless-essid adhoc_net
+  wireless-mode ad-hoc
+#+end_src
+
+I chose the channel 1 for the ad-hoc wifi, but any free channel would work.
+
+** Make sure to load the batman-adv module
+=echo 'batman-adv' | sudo tee --append /etc/modules=
+** Make sure dhcpcd does not try to manage =wlan1=
+=echo 'denyinterfaces wlan1' | sudo tee --append /etc/dhcpcd.conf=
+** [Specific to the gateway] Set up the parameters of the dhcp server that will attribute the IP addresses on the adhoc network
+Edit the file =/etc/dnsmasq.conf=
+Change or uncomment =server= line to =server=/localnet/192.168.199.1= (must match the IP address given to the gateway)
+Change or uncomment =dhcp-range= line to =dhcp-range=192.168.199.2,192.168.199.99,255.255.255.0,12h= (you can adjust the IP range here to accomodate for more devices. Just make sure not to include the gateway in this range as you want a fixed address for it).
+** [Specific to the access points] Configure the =wlan0= interface to broadcast the access point wifi and start the service after reboot
+Write =/etc/hostapd/wlan0.conf=, and make sure to choose a channel that is free (ie do not use the same as the primary network). You might also want to setup different ssids for each of the access points. Choose the passphrase for the broadcasted wifi.
+#+begin_src
+interface=wlan0
+# bridge=br0
+hw_mode=g
+channel=7
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+ssid=extended_net
+wpa_passphrase="secret passphrase for extended_net"
+#+end_src
+
+Edit /etc/default/hostapd.conf
+#+begin_src
+OPTS="-B"
+#+end_src
+
+And activate the access point
+=sudo systemctl enable hostapd@wlan0.service=
+
+** [Specific for the gateway] Script to activate all network interfaces
+Create the file =mesh.sh= in the home directory of the user =pi=. NB that =pi= needs to have the ability to =sudo= without password so that the setup can be automated at boot.
+
+The following instructions suppose that the gateway is connected to the primary network using the network interface =wlan0=. You can check the name using =ip link list=. The interface =bat0= is the one that is implementing the adhoc network using the physical interface =wlan1=. Because this interface encapsulates the trafic from the primary network, you need to adjust the mtu so that it can fit the initial mtu (usually 1500) plus the added data for batman. Besides port-forwarding between =wlan0= and =bat0=, it also sets =bat0= in gateway mode, and fixes its IP address.
+
+#+begin_src
+#!/bin/bash
+
+# Setup interfaces for mesh
+# Set wlan1 as physical interface used to build bat0
+sudo batctl if add wlan1
+# Set mtu value that fits encapsulation of batadv protocol
+sudo ifconfig bat0 mtu 1532 
+
+# Setup gateway mode (server)
+sudo batctl gw_mode server 
+
+# Enable port forwarding between wlan0 and bat0
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+sudo iptables -A FORWARD -i wlan0 -o bat0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+sudo iptables -A FORWARD -i bat0 -o wlan0 -j ACCEPT
+
+sudo ifconfig wlan0 up
+sudo ifconfig wlan1 up #make sure wlan1 is activated
+sudo ifconfig bat0 up #make sure bat0 is activated
+sudo ifconfig bat0 192.168.199.1/24 #fix gateway address
+#+end_src
+
+Once the file is created, make it executable
+
+=sudo chmod +x mesh.sh=
+
+and add (possibly also adjusting the path) =home/pi/mesh.sh &= before =exit 0= in =/etc/rc.local= to execute the file at boot.
+
+** [Specific for the access points] Script to activate all network interfaces
+Create the file =mesh.sh= in the home directory of the user =pi=. NB that =pi= needs to have the ability to =sudo= without password so that the setup can be automated at boot.
+
+The following instructions suppose that access points will be set using =wlan0=. You can check the available interfaces using =ip link list=. The interface =bat0= is the one that is implementing the adhoc network and is using the physical interface =wlan1=. Because this interface encapsulates the trafic from the primary network, you need to adjust the mtu so that it can fit the initial mtu (usually 1500) plus the added data for batman. Besides port-forwarding between =wlan0= and =bat0=, it also sets =bat0= in gateway mode, and fixes its IP address.
+
+#+begin_src
+#!/bin/bash
+
+# Setup interfaces for mesh
+# Set wlan1 as physical interface used to build bat0
+sudo batctl if add wlan1 
+# Set mtu value that fits encapsulation of batadv protocol
+sudo ifconfig bat0 mtu 1532 
+
+# Configuring bridge
+sudo brctl addbr br0
+sudo brctl addif br0 bat0 wlan0
+
+# Set gateway mode to client
+sudo batctl gw_mode client 
+
+sudo ifconfig wlan0 up
+sudo ifconfig wlan1 up # make sure wlan1 is activated
+sudo ifconfig bat0 up # make sure bat0 is activated
+
+# start dhcp for br0
+sudo dhclient -r br0
+sudo dhclient br0
+#+end_src
+
+Once the file is created, make it executable
+
+=sudo chmod +x mesh.sh=
+
+and add (possibly also adjusting the path) =home/pi/mesh.sh &= before =exit 0= in =/etc/rc.local= to execute the file at boot.
+
+
